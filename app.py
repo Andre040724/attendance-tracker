@@ -13,7 +13,7 @@ def load_employees():
     if os.path.exists(EMPLOYEES_FILE):
         return pd.read_csv(EMPLOYEES_FILE)
     else:
-        # Template only uses Employee ID and times now
+        # Template only uses Employee ID and times
         return pd.DataFrame(columns=["Employee ID", "Scheduled Time In", "Scheduled Time Out"])
 
 df_employees = load_employees()
@@ -36,9 +36,11 @@ with tab2:
         with col1:
             new_id = st.text_input("Employee ID*")
         with col2:
-            new_time_in = st.text_input("Scheduled Time In (e.g., 08:00:00)*")
+            # Updated placeholder to Hour:Minute
+            new_time_in = st.text_input("Scheduled Time In (e.g., 08:00)*")
         with col3:
-            new_time_out = st.text_input("Scheduled Time Out (e.g., 17:00:00)*")
+            # Updated placeholder to Hour:Minute
+            new_time_out = st.text_input("Scheduled Time Out (e.g., 17:00)*")
         
         submitted = st.form_submit_button("➕ Add Employee")
         
@@ -91,10 +93,8 @@ with tab1:
         st.markdown("### 📅 Select a Date to Analyze")
         unique_dates = sorted(df_log['DateOnly'].dropna().unique())
         
-        # Calculate the index of the latest date (the last item in the sorted list)
-        latest_date_index = len(unique_dates) - 1
-        
         # Set the default selected option to the latest date
+        latest_date_index = len(unique_dates) - 1
         selected_date = st.selectbox(
             "Choose a date from the dataset:", 
             unique_dates, 
@@ -112,7 +112,7 @@ with tab1:
 
                     daily_data = df_log[df_log['DateOnly'] == selected_date].copy()
                     
-                    # Merge on Employee ID instead of Email
+                    # Merge on Employee ID
                     merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='left')
 
                     statuses = []
@@ -123,9 +123,22 @@ with tab1:
                             continue
 
                         actual_time = row['Timestamp'].time()
+                        
+                        # --- FUTURE-PROOFED TIME PARSING ---
+                        # This safely handles both "08:00" and "08:00:00"
+                        time_in_str = str(row['Scheduled Time In']).strip()
+                        time_out_str = str(row['Scheduled Time Out']).strip()
+                        
                         try:
-                            scheduled_in = datetime.strptime(str(row['Scheduled Time In']).strip(), "%H:%M:%S").time()
-                            scheduled_out = datetime.strptime(str(row['Scheduled Time Out']).strip(), "%H:%M:%S").time()
+                            if time_in_str.count(':') == 1:
+                                scheduled_in = datetime.strptime(time_in_str, "%H:%M").time()
+                            else:
+                                scheduled_in = datetime.strptime(time_in_str, "%H:%M:%S").time()
+                                
+                            if time_out_str.count(':') == 1:
+                                scheduled_out = datetime.strptime(time_out_str, "%H:%M").time()
+                            else:
+                                scheduled_out = datetime.strptime(time_out_str, "%H:%M:%S").time()
                         except ValueError:
                             statuses.append("Time Format Error")
                             continue
@@ -160,7 +173,7 @@ with tab1:
 
                     merged_data['Calculated Status'] = statuses
                     
-                    # The Email Address is still pulled from the daily log for the final report
+                    # Display the final report
                     final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
                     
                     st.success("Analysis Complete!")

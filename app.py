@@ -36,10 +36,8 @@ with tab2:
         with col1:
             new_id = st.text_input("Employee ID*")
         with col2:
-            # Updated placeholder to Hour:Minute
             new_time_in = st.text_input("Scheduled Time In (e.g., 08:00)*")
         with col3:
-            # Updated placeholder to Hour:Minute
             new_time_out = st.text_input("Scheduled Time Out (e.g., 17:00)*")
         
         submitted = st.form_submit_button("➕ Add Employee")
@@ -84,7 +82,6 @@ with tab1:
             df_log = pd.read_csv(attendance_file)
             df_log['Timestamp'] = pd.to_datetime(df_log['Timestamp'])
             df_log['DateOnly'] = df_log['Timestamp'].dt.date
-            # Clean Employee ID in the daily log to ensure a perfect match
             df_log['Employee ID'] = df_log['Employee ID'].astype(str).str.strip()
         except Exception as e:
             st.error(f"Error reading file. Error: {e}")
@@ -93,7 +90,6 @@ with tab1:
         st.markdown("### 📅 Select a Date to Analyze")
         unique_dates = sorted(df_log['DateOnly'].dropna().unique())
         
-        # Set the default selected option to the latest date
         latest_date_index = len(unique_dates) - 1
         selected_date = st.selectbox(
             "Choose a date from the dataset:", 
@@ -106,26 +102,20 @@ with tab1:
                 st.warning("Your Employee list is empty! Please go to the 'Manage Employees' tab and add them first.")
             else:
                 with st.spinner('Analyzing...'):
-                    # Refresh employee list and clean IDs for merging
                     df_employees = load_employees()
                     df_employees['Employee ID'] = df_employees['Employee ID'].astype(str).str.strip()
 
                     daily_data = df_log[df_log['DateOnly'] == selected_date].copy()
                     
-                    # Merge on Employee ID
-                    merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='left')
+                    # --- CHANGED FROM 'left' TO 'inner' ---
+                    # This ensures ONLY employees in your saved list are processed and shown
+                    merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='inner')
 
                     statuses = []
 
                     for index, row in merged_data.iterrows():
-                        if pd.isna(row['Scheduled Time In']):
-                            statuses.append("Not in Employee List")
-                            continue
-
                         actual_time = row['Timestamp'].time()
                         
-                        # --- FUTURE-PROOFED TIME PARSING ---
-                        # This safely handles both "08:00" and "08:00:00"
                         time_in_str = str(row['Scheduled Time In']).strip()
                         time_out_str = str(row['Scheduled Time Out']).strip()
                         
@@ -173,7 +163,6 @@ with tab1:
 
                     merged_data['Calculated Status'] = statuses
                     
-                    # Display the final report
                     final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
                     
                     st.success("Analysis Complete!")

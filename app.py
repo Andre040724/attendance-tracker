@@ -107,8 +107,7 @@ with tab1:
 
                     daily_data = df_log[df_log['DateOnly'] == selected_date].copy()
                     
-                    # --- CHANGED FROM 'left' TO 'inner' ---
-                    # This ensures ONLY employees in your saved list are processed and shown
+                    # 'inner' join ensures ONLY employees in your saved list are processed
                     merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='inner')
 
                     statuses = []
@@ -165,12 +164,33 @@ with tab1:
                     
                     final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
                     
+                    # Sort by Employee ID and then Timestamp so everything is cleanly grouped
+                    final_report = final_report.sort_values(by=['Employee ID', 'Timestamp'])
+                    
                     st.success("Analysis Complete!")
-                    st.dataframe(final_report, use_container_width=True)
+                    
+                    # --- INDIVIDUAL EMPLOYEE BREAKDOWN ---
+                    st.markdown("### 🧑‍💻 Individual Employee Breakdown")
+                    st.write("Click on an employee to see their specific clock-in and clock-out logs for this day.")
+                    
+                    # Group the data and create a drop-down for each employee
+                    grouped_data = final_report.groupby('Employee ID')
+                    for emp_id, emp_data in grouped_data:
+                        emp_email = emp_data['Email Address'].iloc[0]
+                        with st.expander(f"Employee: {emp_id} ({emp_email})"):
+                            # Hide the ID and Email in the sub-table since it's already in the header
+                            clean_emp_data = emp_data[['Timestamp', 'Action', 'Calculated Status', 'Scheduled Time In', 'Scheduled Time Out']]
+                            st.dataframe(clean_emp_data, use_container_width=True, hide_index=True)
+                            
+                    st.divider()
+                    
+                    # --- FULL SUMMARY TABLE ---
+                    st.markdown("### 📋 Full Sorted Report")
+                    st.dataframe(final_report, use_container_width=True, hide_index=True)
 
                     csv_output = final_report.to_csv(index=False).encode('utf-8')
                     st.download_button(
-                        label="📥 Download Daily Report (CSV)",
+                        label="📥 Download Sorted Report (CSV)",
                         data=csv_output,
                         file_name=f"Attendance_Report_{selected_date}.csv",
                         mime='text/csv',

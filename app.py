@@ -7,73 +7,65 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="Attendance Monitor", page_icon="⏱️", layout="wide")
 
 # --- Database Setup ---
-# This creates a local file to save your employees permanently
-ROSTER_FILE = "master_roster.csv"
+EMPLOYEES_FILE = "employees.csv"
 
-def load_roster():
-    if os.path.exists(ROSTER_FILE):
-        return pd.read_csv(ROSTER_FILE)
+def load_employees():
+    if os.path.exists(EMPLOYEES_FILE):
+        return pd.read_csv(EMPLOYEES_FILE)
     else:
-        # Create an empty template if the file doesn't exist yet
-        return pd.DataFrame(columns=["Email Address", "Employee ID", "Scheduled Time In", "Scheduled Time Out"])
+        # Template only uses Employee ID and times now
+        return pd.DataFrame(columns=["Employee ID", "Scheduled Time In", "Scheduled Time Out"])
 
-# Load the saved employees
-df_roster = load_roster()
+df_employees = load_employees()
 
 st.title("⏱️ Automated Attendance Tracker")
 
 # --- Create Tabs for Navigation ---
-tab1, tab2 = st.tabs(["📊 Analyze Attendance", "👥 Manage Master Roster"])
+tab1, tab2 = st.tabs(["📊 Analyze Attendance", "👥 Manage Employees"])
 
 
 # ==========================================
-# TAB 2: MANAGE MASTER ROSTER 
+# TAB 2: MANAGE EMPLOYEES 
 # ==========================================
 with tab2:
     st.header("Add New Employee")
-    st.write("Fill out the details below. The data will save automatically.")
+    st.write("Fill out the details below to add an employee to the system.")
     
-    # Create an input form
     with st.form("add_employee_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            new_email = st.text_input("Email Address*")
             new_id = st.text_input("Employee ID*")
         with col2:
             new_time_in = st.text_input("Scheduled Time In (e.g., 08:00:00)*")
+        with col3:
             new_time_out = st.text_input("Scheduled Time Out (e.g., 17:00:00)*")
         
-        # The Add Employee Button
         submitted = st.form_submit_button("➕ Add Employee")
         
         if submitted:
-            if new_email and new_id and new_time_in and new_time_out:
-                # Group the new data
+            if new_id and new_time_in and new_time_out:
                 new_employee = pd.DataFrame([{
-                    "Email Address": new_email,
-                    "Employee ID": new_id,
-                    "Scheduled Time In": new_time_in,
-                    "Scheduled Time Out": new_time_out
+                    "Employee ID": str(new_id).strip(),
+                    "Scheduled Time In": str(new_time_in).strip(),
+                    "Scheduled Time Out": str(new_time_out).strip()
                 }])
                 
-                # Add it to the existing roster and save the file
-                df_roster = pd.concat([df_roster, new_employee], ignore_index=True)
-                df_roster.to_csv(ROSTER_FILE, index=False)
+                df_employees = pd.concat([df_employees, new_employee], ignore_index=True)
+                df_employees.to_csv(EMPLOYEES_FILE, index=False)
                 
-                st.success(f"Successfully added {new_email} to the database!")
-                st.rerun() # Refreshes the app instantly to show the new employee
+                st.success(f"Successfully added {new_id} to the database!")
+                st.rerun()
             else:
                 st.error("Please fill in all the input boxes.")
 
     st.divider()
     
-    # Bonus Feature: An interactive table to edit/delete existing employees
     st.subheader("Current Employee Database")
-    st.write("You can also double-click cells below to edit them, or select rows to delete them.")
-    edited_roster = st.data_editor(df_roster, num_rows="dynamic", use_container_width=True)
+    st.write("Double-click cells to edit them, or select rows to delete them.")
+    edited_employees = st.data_editor(df_employees, num_rows="dynamic", use_container_width=True)
     
     if st.button("💾 Save Database Changes"):
-        edited_roster.to_csv(ROSTER_FILE, index=False)
+        edited_employees.to_csv(EMPLOYEES_FILE, index=False)
         st.success("Database updated successfully!")
 
 
@@ -81,9 +73,8 @@ with tab2:
 # TAB 1: ANALYZE ATTENDANCE
 # ==========================================
 with tab1:
-    st.write("Upload your daily Google Forms CSV. The app will automatically check it against your saved Master Roster.")
+    st.write("Upload your daily Google Forms CSV. The app will automatically check it against your saved Employees.")
     
-    # Notice we only need ONE file uploader now!
     attendance_file = st.file_uploader("Upload Daily Log (Google Forms CSV)", type=["csv"])
     
     if attendance_file:
@@ -91,30 +82,44 @@ with tab1:
             df_log = pd.read_csv(attendance_file)
             df_log['Timestamp'] = pd.to_datetime(df_log['Timestamp'])
             df_log['DateOnly'] = df_log['Timestamp'].dt.date
+            # Clean Employee ID in the daily log to ensure a perfect match
+            df_log['Employee ID'] = df_log['Employee ID'].astype(str).str.strip()
         except Exception as e:
             st.error(f"Error reading file. Error: {e}")
             st.stop()
 
         st.markdown("### 📅 Select a Date to Analyze")
         unique_dates = sorted(df_log['DateOnly'].dropna().unique())
-        selected_date = st.selectbox("Choose a date from the dataset:", unique_dates)
+        
+        # Calculate the index of the latest date (the last item in the sorted list)
+        latest_date_index = len(unique_dates) - 1
+        
+        # Set the default selected option to the latest date
+        selected_date = st.selectbox(
+            "Choose a date from the dataset:", 
+            unique_dates, 
+            index=latest_date_index
+        )
 
         if st.button("Run Analysis"):
-            if df_roster.empty:
-                st.warning("Your Master Roster is empty! Please go to the 'Manage Master Roster' tab and add employees first.")
+            if df_employees.empty:
+                st.warning("Your Employee list is empty! Please go to the 'Manage Employees' tab and add them first.")
             else:
                 with st.spinner('Analyzing...'):
+                    # Refresh employee list and clean IDs for merging
+                    df_employees = load_employees()
+                    df_employees['Employee ID'] = df_employees['Employee ID'].astype(str).str.strip()
+
                     daily_data = df_log[df_log['DateOnly'] == selected_date].copy()
                     
-                    # Compare the daily log to the saved roster
-                    merged_data = pd.merge(daily_data, df_roster, on='Email Address', how='left')
+                    # Merge on Employee ID instead of Email
+                    merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='left')
 
                     statuses = []
 
                     for index, row in merged_data.iterrows():
-                        # If the email from the form isn't in your roster
                         if pd.isna(row['Scheduled Time In']):
-                            statuses.append("Not in Roster")
+                            statuses.append("Not in Employee List")
                             continue
 
                         actual_time = row['Timestamp'].time()
@@ -125,7 +130,6 @@ with tab1:
                             statuses.append("Time Format Error")
                             continue
                         
-                        # Math setup for early/late calculations
                         dummy_date = datetime(2000, 1, 1)
                         dt_actual = datetime.combine(dummy_date, actual_time)
                         dt_sched_in = datetime.combine(dummy_date, scheduled_in)
@@ -154,17 +158,14 @@ with tab1:
                         else:
                             statuses.append("Unknown Action")
 
-                    # Apply calculations
                     merged_data['Calculated Status'] = statuses
                     
-                    # Clean up the output table
-                    final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID_x', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
-                    final_report = final_report.rename(columns={'Employee ID_x': 'Employee ID'})
+                    # The Email Address is still pulled from the daily log for the final report
+                    final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
                     
                     st.success("Analysis Complete!")
                     st.dataframe(final_report, use_container_width=True)
 
-                    # Create download link
                     csv_output = final_report.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="📥 Download Daily Report (CSV)",

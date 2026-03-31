@@ -39,8 +39,8 @@ def get_closest_scheduled_time(actual_time, sched_times_list):
     closest_dt = None
     min_diff = None
     
-    for st in sched_times_list:
-        dt_st = datetime.combine(dummy_date, st)
+    for st_time in sched_times_list:
+        dt_st = datetime.combine(dummy_date, st_time)
         # Calculate absolute difference in seconds
         diff = abs((dt_actual - dt_st).total_seconds())
         if min_diff is None or diff < min_diff:
@@ -137,20 +137,16 @@ with tab1:
                     merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='inner')
 
                     statuses = []
-                    # Keep track of WHICH shift they matched with for clarity
                     matched_shifts = []
 
                     for index, row in merged_data.iterrows():
                         actual_time = row['Timestamp'].time()
                         action = str(row['Action']).strip().lower()
                         
-                        # --- SPLIT SHIFTS LOGIC ---
-                        # Split by slash, ignoring any empty spaces
                         raw_in_strs = [s.strip() for s in str(row['Scheduled Time In']).split('/') if s.strip()]
                         raw_out_strs = [s.strip() for s in str(row['Scheduled Time Out']).split('/') if s.strip()]
                         
                         try:
-                            # Convert string lists into Time object lists
                             sched_ins = [parse_time_string(ts) for ts in raw_in_strs]
                             sched_outs = [parse_time_string(ts) for ts in raw_out_strs]
                         except ValueError:
@@ -167,15 +163,14 @@ with tab1:
                                 matched_shifts.append("None")
                                 continue
                                 
-                            # Find the closest time in
                             closest_dt_in = get_closest_scheduled_time(actual_time, sched_ins)
                             matched_shifts.append(closest_dt_in.strftime("%H:%M:%S"))
                             
                             grace_period_in = closest_dt_in + timedelta(minutes=10)
                             
-                            if dt_actual < closest_dt_in:
-                                statuses.append("Early In")
-                            elif closest_dt_in <= dt_actual <= grace_period_in:
+                            # --- EARLY IN RULE REMOVED HERE ---
+                            # Anything up to the end of the 10-minute grace period is "On Time In"
+                            if dt_actual <= grace_period_in:
                                 statuses.append("On Time In")
                             else:
                                 statuses.append("Late In")
@@ -186,12 +181,12 @@ with tab1:
                                 matched_shifts.append("None")
                                 continue
                                 
-                            # Find the closest time out
                             closest_dt_out = get_closest_scheduled_time(actual_time, sched_outs)
                             matched_shifts.append(closest_dt_out.strftime("%H:%M:%S"))
                             
                             grace_period_out = closest_dt_out + timedelta(minutes=30)
                             
+                            # --- EARLY OUT RULE KEPT HERE ---
                             if dt_actual < closest_dt_out:
                                 statuses.append("Early Out")
                             elif closest_dt_out <= dt_actual <= grace_period_out:
@@ -210,7 +205,6 @@ with tab1:
                     
                     st.success("Analysis Complete!")
                     
-                    # --- INDIVIDUAL EMPLOYEE BREAKDOWN ---
                     st.markdown("### 🧑‍💻 Individual Employee Breakdown")
                     st.write("Click on an employee to see their specific clock-in and clock-out logs.")
                     
@@ -223,7 +217,6 @@ with tab1:
                             
                     st.divider()
                     
-                    # --- FULL SUMMARY TABLE ---
                     st.markdown("### 📋 Full Sorted Report")
                     st.dataframe(final_report, use_container_width=True, hide_index=True)
 

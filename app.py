@@ -13,32 +13,60 @@ def load_employees():
     if os.path.exists(EMPLOYEES_FILE):
         return pd.read_csv(EMPLOYEES_FILE)
     else:
-        # Template only uses Employee ID and times
         return pd.DataFrame(columns=["Employee ID", "Scheduled Time In", "Scheduled Time Out"])
 
 df_employees = load_employees()
 
 st.title("⏱️ Automated Attendance Tracker")
 
+# --- Helper Functions for Time Parsing ---
+def parse_time_string(time_str):
+    """Safely parses a time string, handling 24:00 and different formats."""
+    time_str = time_str.strip()
+    if time_str == '24:00' or time_str == '24:00:00':
+        return datetime.strptime("23:59:59", "%H:%M:%S").time()
+    
+    if time_str.count(':') == 1:
+        return datetime.strptime(time_str, "%H:%M").time()
+    else:
+        return datetime.strptime(time_str, "%H:%M:%S").time()
+
+def get_closest_scheduled_time(actual_time, sched_times_list):
+    """Finds the closest scheduled time from a list of times to the actual time."""
+    dummy_date = datetime(2000, 1, 1)
+    dt_actual = datetime.combine(dummy_date, actual_time)
+    
+    closest_dt = None
+    min_diff = None
+    
+    for st in sched_times_list:
+        dt_st = datetime.combine(dummy_date, st)
+        # Calculate absolute difference in seconds
+        diff = abs((dt_actual - dt_st).total_seconds())
+        if min_diff is None or diff < min_diff:
+            min_diff = diff
+            closest_dt = dt_st
+            
+    return closest_dt
+
 # --- Create Tabs for Navigation ---
 tab1, tab2 = st.tabs(["📊 Analyze Attendance", "👥 Manage Employees"])
-
 
 # ==========================================
 # TAB 2: MANAGE EMPLOYEES 
 # ==========================================
 with tab2:
     st.header("Add New Employee")
-    st.write("Fill out the details below to add an employee to the system.")
+    st.write("Fill out the details below. **For multiple shifts, separate times with a slash (/)**.")
     
     with st.form("add_employee_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         with col1:
             new_id = st.text_input("Employee ID*")
         with col2:
-            new_time_in = st.text_input("Scheduled Time In (e.g., 08:00)*")
+            new_time_in = st.text_input("Scheduled Time In (e.g., 10:00/18:00)*")
         with col3:
-            new_time_out = st.text_input("Scheduled Time Out (e.g., 17:00)*")
+            new_time_out = st.text_input("Scheduled Time Out (e.g., 12:00/24:00)*")
         
         submitted = st.form_submit_button("➕ Add Employee")
         
@@ -67,7 +95,6 @@ with tab2:
     if st.button("💾 Save Database Changes"):
         edited_employees.to_csv(EMPLOYEES_FILE, index=False)
         st.success("Database updated successfully!")
-
 
 # ==========================================
 # TAB 1: ANALYZE ATTENDANCE
@@ -107,79 +134,91 @@ with tab1:
 
                     daily_data = df_log[df_log['DateOnly'] == selected_date].copy()
                     
-                    # 'inner' join ensures ONLY employees in your saved list are processed
                     merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='inner')
 
                     statuses = []
+                    # Keep track of WHICH shift they matched with for clarity
+                    matched_shifts = []
 
                     for index, row in merged_data.iterrows():
                         actual_time = row['Timestamp'].time()
+                        action = str(row['Action']).strip().lower()
                         
-                        time_in_str = str(row['Scheduled Time In']).strip()
-                        time_out_str = str(row['Scheduled Time Out']).strip()
+                        # --- SPLIT SHIFTS LOGIC ---
+                        # Split by slash, ignoring any empty spaces
+                        raw_in_strs = [s.strip() for s in str(row['Scheduled Time In']).split('/') if s.strip()]
+                        raw_out_strs = [s.strip() for s in str(row['Scheduled Time Out']).split('/') if s.strip()]
                         
                         try:
-                            if time_in_str.count(':') == 1:
-                                scheduled_in = datetime.strptime(time_in_str, "%H:%M").time()
-                            else:
-                                scheduled_in = datetime.strptime(time_in_str, "%H:%M:%S").time()
-                                
-                            if time_out_str.count(':') == 1:
-                                scheduled_out = datetime.strptime(time_out_str, "%H:%M").time()
-                            else:
-                                scheduled_out = datetime.strptime(time_out_str, "%H:%M:%S").time()
+                            # Convert string lists into Time object lists
+                            sched_ins = [parse_time_string(ts) for ts in raw_in_strs]
+                            sched_outs = [parse_time_string(ts) for ts in raw_out_strs]
                         except ValueError:
                             statuses.append("Time Format Error")
+                            matched_shifts.append("Error")
                             continue
                         
                         dummy_date = datetime(2000, 1, 1)
                         dt_actual = datetime.combine(dummy_date, actual_time)
-                        dt_sched_in = datetime.combine(dummy_date, scheduled_in)
-                        dt_sched_out = datetime.combine(dummy_date, scheduled_out)
-                        
-                        grace_period_in = dt_sched_in + timedelta(minutes=10)
-                        grace_period_out = dt_sched_out + timedelta(minutes=30)
-
-                        action = str(row['Action']).strip().lower()
 
                         if "clock in" in action:
-                            if dt_actual < dt_sched_in:
+                            if not sched_ins:
+                                statuses.append("No Schedule")
+                                matched_shifts.append("None")
+                                continue
+                                
+                            # Find the closest time in
+                            closest_dt_in = get_closest_scheduled_time(actual_time, sched_ins)
+                            matched_shifts.append(closest_dt_in.strftime("%H:%M:%S"))
+                            
+                            grace_period_in = closest_dt_in + timedelta(minutes=10)
+                            
+                            if dt_actual < closest_dt_in:
                                 statuses.append("Early In")
-                            elif dt_sched_in <= dt_actual <= grace_period_in:
+                            elif closest_dt_in <= dt_actual <= grace_period_in:
                                 statuses.append("On Time In")
                             else:
                                 statuses.append("Late In")
                         
                         elif "clock out" in action:
-                            if dt_actual < dt_sched_out:
+                            if not sched_outs:
+                                statuses.append("No Schedule")
+                                matched_shifts.append("None")
+                                continue
+                                
+                            # Find the closest time out
+                            closest_dt_out = get_closest_scheduled_time(actual_time, sched_outs)
+                            matched_shifts.append(closest_dt_out.strftime("%H:%M:%S"))
+                            
+                            grace_period_out = closest_dt_out + timedelta(minutes=30)
+                            
+                            if dt_actual < closest_dt_out:
                                 statuses.append("Early Out")
-                            elif dt_sched_out <= dt_actual <= grace_period_out:
+                            elif closest_dt_out <= dt_actual <= grace_period_out:
                                 statuses.append("On Time Out")
                             else:
                                 statuses.append("Late Out")
                         else:
                             statuses.append("Unknown Action")
+                            matched_shifts.append("N/A")
 
                     merged_data['Calculated Status'] = statuses
+                    merged_data['Matched Shift'] = matched_shifts
                     
-                    final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Scheduled Time In', 'Scheduled Time Out', 'Calculated Status']]
-                    
-                    # Sort by Employee ID and then Timestamp so everything is cleanly grouped
+                    final_report = merged_data[['Timestamp', 'Email Address', 'Employee ID', 'Action', 'Matched Shift', 'Calculated Status']]
                     final_report = final_report.sort_values(by=['Employee ID', 'Timestamp'])
                     
                     st.success("Analysis Complete!")
                     
                     # --- INDIVIDUAL EMPLOYEE BREAKDOWN ---
                     st.markdown("### 🧑‍💻 Individual Employee Breakdown")
-                    st.write("Click on an employee to see their specific clock-in and clock-out logs for this day.")
+                    st.write("Click on an employee to see their specific clock-in and clock-out logs.")
                     
-                    # Group the data and create a drop-down for each employee
                     grouped_data = final_report.groupby('Employee ID')
                     for emp_id, emp_data in grouped_data:
                         emp_email = emp_data['Email Address'].iloc[0]
                         with st.expander(f"Employee: {emp_id} ({emp_email})"):
-                            # Hide the ID and Email in the sub-table since it's already in the header
-                            clean_emp_data = emp_data[['Timestamp', 'Action', 'Calculated Status', 'Scheduled Time In', 'Scheduled Time Out']]
+                            clean_emp_data = emp_data[['Timestamp', 'Action', 'Matched Shift', 'Calculated Status']]
                             st.dataframe(clean_emp_data, use_container_width=True, hide_index=True)
                             
                     st.divider()

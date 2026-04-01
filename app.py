@@ -30,34 +30,28 @@ def parse_time_string(time_str):
     else:
         return datetime.strptime(time_str, "%H:%M:%S").time()
 
-def get_closest_scheduled_time(actual_time, sched_times_list):
-    dummy_date = datetime(2000, 1, 1)
-    # If the actual time is past midnight (e.g. 00:05), push it forward 24 hours for math
-    # so it correctly calculates distance from a 23:59:59 schedule
-    is_late_night = actual_time.hour < 5
-    dt_actual = datetime.combine(dummy_date, actual_time)
-    if is_late_night:
-        dt_actual += timedelta(days=1)
-    
+def create_scheduled_datetime(logical_date, time_obj):
+    """Combines the Logical Date and Time into a real Datetime object."""
+    dt = datetime.combine(logical_date, time_obj)
+    # If the scheduled time is between 00:00 and 04:59, it actually belongs to the NEXT calendar day
+    if time_obj.hour < 5:
+        dt += timedelta(days=1)
+    return dt
+
+def get_closest_scheduled_datetime(actual_datetime, logical_date, sched_times_list):
+    """Finds the closest scheduled datetime from a list of shifts."""
     closest_dt = None
     min_diff = None
     
-    for st_time in sched_times_list:
-        dt_st = datetime.combine(dummy_date, st_time)
-        # If the scheduled time is 23:59:59, we also push it forward so the math matches
-        if st_time.hour >= 23:
-            dt_st += timedelta(days=1)
-            
-        diff = abs((dt_actual - dt_st).total_seconds())
+    for time_obj in sched_times_list:
+        dt_st = create_scheduled_datetime(logical_date, time_obj)
+        # Calculate absolute difference in seconds
+        diff = abs((actual_datetime - dt_st).total_seconds())
         if min_diff is None or diff < min_diff:
             min_diff = diff
             closest_dt = dt_st
             
-    # Revert the dummy date push before returning
-    if closest_dt.day > 1:
-        closest_dt -= timedelta(days=1)
-        
-    return closest_dt.time()
+    return closest_dt
 
 # --- Create Tabs for Navigation ---
 tab1, tab2 = st.tabs(["📊 Analyze Attendance", "👥 Manage Employees"])
@@ -118,9 +112,7 @@ with tab1:
             df_log = pd.read_csv(attendance_file)
             df_log['Timestamp'] = pd.to_datetime(df_log['Timestamp'])
             
-            # --- THE MIDNIGHT CROSSOVER FIX ---
-            # Subtract 5 hours from the timestamp just to figure out what "Logical Date" it belongs to.
-            # E.g., March 2nd at 01:00 AM is grouped with March 1st.
+            # Group late-night clock-ins/outs with the previous logical day (offset by 5 hours)
             df_log['LogicalDate'] = (df_log['Timestamp'] - pd.Timedelta(hours=5)).dt.date
             
             df_log['Employee ID'] = df_log['Employee ID'].astype(str).str.strip()
@@ -129,7 +121,6 @@ with tab1:
             st.stop()
 
         st.markdown("### 📅 Select a Date to Analyze")
-        # We now sort by the Logical Date
         unique_dates = sorted(df_log['LogicalDate'].dropna().unique())
         
         latest_date_index = len(unique_dates) - 1
@@ -147,16 +138,16 @@ with tab1:
                     df_employees = load_employees()
                     df_employees['Employee ID'] = df_employees['Employee ID'].astype(str).str.strip()
 
-                    # We filter the data based on the Logical Date, not the raw calendar date!
                     daily_data = df_log[df_log['LogicalDate'] == selected_date].copy()
-                    
                     merged_data = pd.merge(daily_data, df_employees, on='Employee ID', how='inner')
 
                     statuses = []
                     matched_shifts = []
 
                     for index, row in merged_data.iterrows():
-                        actual_time = row['Timestamp'].time()
+                        # We use the FULL Timestamp now, no more abstract dummy dates
+                        dt_actual = row['Timestamp']  
+                        logical_date = row['LogicalDate']
                         action = str(row['Action']).strip().lower()
                         
                         raw_in_strs = [s.strip() for s in str(row['Scheduled Time In']).split('/') if s.strip()]
@@ -169,14 +160,6 @@ with tab1:
                             statuses.append("Time Format Error")
                             matched_shifts.append("Error")
                             continue
-                        
-                        # --- MATH FOR LATE NIGHTS ---
-                        dummy_date = datetime(2000, 1, 1)
-                        dt_actual = datetime.combine(dummy_date, actual_time)
-                        
-                        # If actual time is early morning (past midnight), push it to "tomorrow" for the math
-                        if actual_time.hour < 5:
-                            dt_actual += timedelta(days=1)
 
                         if "clock in" in action:
                             if not sched_ins:
@@ -184,15 +167,12 @@ with tab1:
                                 matched_shifts.append("None")
                                 continue
                                 
-                            closest_time_in = get_closest_scheduled_time(actual_time, sched_ins)
-                            matched_shifts.append(closest_time_in.strftime("%H:%M:%S"))
+                            closest_dt_in = get_closest_scheduled_datetime(dt_actual, logical_date, sched_ins)
+                            matched_shifts.append(closest_dt_in.strftime("%H:%M:%S"))
                             
-                            dt_sched_in = datetime.combine(dummy_date, closest_time_in)
-                            if closest_time_in.hour >= 23:
-                                dt_sched_in += timedelta(days=1)
-                                
-                            grace_period_in = dt_sched_in + timedelta(minutes=10)
+                            grace_period_in = closest_dt_in + timedelta(minutes=10)
                             
+                            # Early In merges into On Time In
                             if dt_actual <= grace_period_in:
                                 statuses.append("On Time In")
                             else:
@@ -204,18 +184,15 @@ with tab1:
                                 matched_shifts.append("None")
                                 continue
                                 
-                            closest_time_out = get_closest_scheduled_time(actual_time, sched_outs)
-                            matched_shifts.append(closest_time_out.strftime("%H:%M:%S"))
+                            closest_dt_out = get_closest_scheduled_datetime(dt_actual, logical_date, sched_outs)
+                            matched_shifts.append(closest_dt_out.strftime("%H:%M:%S"))
                             
-                            dt_sched_out = datetime.combine(dummy_date, closest_time_out)
-                            if closest_time_out.hour >= 23:
-                                dt_sched_out += timedelta(days=1)
-                                
-                            grace_period_out = dt_sched_out + timedelta(minutes=30)
+                            grace_period_out = closest_dt_out + timedelta(minutes=30)
                             
-                            if dt_actual < dt_sched_out:
+                            # Standard Early/On Time/Late logic
+                            if dt_actual < closest_dt_out:
                                 statuses.append("Early Out")
-                            elif dt_sched_out <= dt_actual <= grace_period_out:
+                            elif closest_dt_out <= dt_actual <= grace_period_out:
                                 statuses.append("On Time Out")
                             else:
                                 statuses.append("Late Out")
